@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Health Monitor v8.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════
+   TOKENS
+═══════════════════════════════════════════ */
+:root {
+  --bg:         #060810;
+  --surface:    #0b1018;
+  --surface2:   #111922;
+  --border:     #1b2436;
+  --border2:    #243048;
+
+  --ecg:        #00e59e;
+  --ecg-dim:    rgba(0,229,158,0.10);
+  --ecg-glow:   rgba(0,229,158,0.30);
+
+  --accent:     #3d7eff;
+  --accent-dim: rgba(61,126,255,0.12);
+
+  --spo2:       #a78bfa;
+  --spo2-dim:   rgba(167,139,250,0.12);
+
+  --temp:       #fb923c;
+  --temp-dim:   rgba(251,146,60,0.12);
+
+  --pr:         #38bdf8;
+  --pr-dim:     rgba(56,189,248,0.12);
+
+  --good:       #34d399;
+  --warn:       #fbbf24;
+  --danger:     #f87171;
+
+  --text:       #b8c8e0;
+  --text-dim:   #475e78;
+  --text-br:    #e0ecff;
+  --text-muted: #1e2d40;
+
+  --mono: 'JetBrains Mono', monospace;
+  --ui:   'Syne', sans-serif;
+  --r:    10px;
+  --rs:   6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 14px;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ═══════════════════════════════════════════
+   TOP BAR
+═══════════════════════════════════════════ */
+#topbar {
+  position: sticky; top: 0; z-index: 300;
+  height: 50px;
+  background: rgba(6,8,16,0.95);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 20px; gap: 14px;
+}
+.logo {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  color: var(--ecg); letter-spacing: .12em;
+  display: flex; align-items: center; gap: 8px;
+}
+.logo-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ecg); box-shadow: 0 0 8px var(--ecg-glow);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.65)} }
+
+.spacer { flex: 1; }
+
+.pills { display: flex; gap: 7px; }
+.pill {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
+  padding: 3px 9px; border-radius: 20px; border: 1px solid;
+  letter-spacing: .05em; white-space: nowrap; transition: all .3s;
+}
+.pill .dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+.p-idle  { color:var(--text-dim); border-color:var(--border); }
+.p-idle .dot { background:var(--text-dim); }
+.p-ok    { color:var(--ecg); border-color:var(--ecg-dim); background:var(--ecg-dim); }
+.p-ok .dot  { background:var(--ecg); box-shadow:0 0 5px var(--ecg); animation:pulse-dot 1.4s infinite; }
+.p-warn  { color:var(--warn); border-color:rgba(251,191,36,.22); background:rgba(251,191,36,.07); }
+.p-warn .dot { background:var(--warn); }
+.p-err   { color:var(--danger); border-color:rgba(248,113,113,.22); background:rgba(248,113,113,.07); }
+.p-err .dot  { background:var(--danger); }
+.p-rec   { color:var(--danger); border-color:rgba(248,113,113,.22); background:rgba(248,113,113,.07); }
+.p-rec .dot  { background:var(--danger); animation:blink 1s step-end infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ═══════════════════════════════════════════
+   NAV
+═══════════════════════════════════════════ */
+/* ═══════════════════════════════════════════
+   NAV — UPDATED FOR RESPONSIVENESS
+═══════════════════════════════════════════ */
+#nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap; /* Allows tabs to drop to new lines */
+  padding: 0 10px;
+  justify-content: center; /* Centers the tabs if they wrap */
+}
+
+.ntab {
+  padding: 11px 16px;
+  font-family: var(--ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap; /* Keeps tab text on one line */
+  transition: color .15s, border-color .15s;
+  user-select: none;
+  flex: 0 1 auto; /* Allows tabs to shrink/grow based on screen */
+}
+.ntab:hover { color: var(--text); }
+.ntab.active { color: var(--text-br); border-bottom-color: var(--ecg); }
+
+/* ═══════════════════════════════════════════
+   PAGES  — only .show is visible
+═══════════════════════════════════════════ */
+.page { display: none; padding: 20px; max-width: 1200px; margin: 0 auto; }
+.page.show { display: block; }
+
+/* ═══════════════════════════════════════════
+   CARDS
+═══════════════════════════════════════════ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  position: relative; overflow: hidden;
+}
+.card::after {
+  content:''; position:absolute; top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg,transparent,var(--border2),transparent);
+}
+
+.card-hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 13px;
+}
+.card-label {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--text-dim);
+}
+.hdr-r { display: flex; align-items: center; gap: 7px; }
+
+/* ═══════════════════════════════════════════
+   GRID
+═══════════════════════════════════════════ */
+.g4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.g3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mb12 { margin-bottom: 12px; }
+.mb14 { margin-bottom: 14px; }
+@media(max-width:900px){ .g4{grid-template-columns:1fr 1fr} }
+@media(max-width:600px){ .g4,.g3,.g2{grid-template-columns:1fr} }
+
+/* ═══════════════════════════════════════════
+   BADGES
+═══════════════════════════════════════════ */
+.badge {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 4px; border: 1px solid;
+  transition: all .3s;
+}
+.b-dim  { background:var(--surface2); color:var(--text-dim); border-color:var(--border); }
+.b-good { background:rgba(52,211,153,.10); color:var(--good); border-color:rgba(52,211,153,.25); }
+.b-warn { background:rgba(251,191,36,.09); color:var(--warn); border-color:rgba(251,191,36,.25); }
+.b-err  { background:rgba(248,113,113,.09); color:var(--danger); border-color:rgba(248,113,113,.25); }
+.b-info { background:var(--accent-dim); color:var(--accent); border-color:rgba(61,126,255,.25); }
+
+/* ═══════════════════════════════════════════
+   VALUES
+═══════════════════════════════════════════ */
+.metric { display: flex; align-items: baseline; gap: 5px; }
+.v-xl {
+  font-family: var(--mono); font-size: 52px; font-weight: 700;
+  line-height: 1; letter-spacing: -.03em; transition: color .3s;
+}
+.v-md {
+  font-family: var(--mono); font-size: 20px; font-weight: 600; line-height: 1;
+}
+.unit { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+.sub  { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); margin-top: 5px; }
+
+.c-ecg  { color:var(--ecg);  text-shadow:0 0 20px var(--ecg-glow); }
+.c-spo2 { color:var(--spo2); text-shadow:0 0 18px rgba(167,139,250,.4); }
+.c-temp { color:var(--temp); text-shadow:0 0 18px rgba(251,146,60,.35); }
+.c-pr   { color:var(--pr);   text-shadow:0 0 16px rgba(56,189,248,.35); }
+.c-dim  { color:var(--text-dim); text-shadow:none; }
+
+/* ═══════════════════════════════════════════
+   ECG CANVAS
+═══════════════════════════════════════════ */
+.ecg-wrap {
+  background: #040710; border-radius: 8px;
+  position: relative; width: 100%; overflow: hidden;
+}
+.ecg-wrap canvas { display:block; width:100%; }
+.h-sm { height: 148px; }
+.h-lg { height: 260px; }
+.ecg-tl {
+  position:absolute; top:8px; left:10px;
+  font-family:var(--mono); font-size:9.5px; color:var(--text-muted);
+  letter-spacing:.06em; pointer-events:none;
+}
+.ecg-br {
+  position:absolute; bottom:8px; right:10px;
+  font-family:var(--mono); font-size:9.5px; color:var(--text-muted);
+  letter-spacing:.06em; pointer-events:none;
+}
+
+/* ═══════════════════════════════════════════
+   TREND SVG
+═══════════════════════════════════════════ */
+.trend-wrap { background:#040710; border-radius:8px; width:100%; overflow:hidden; }
+.trend-wrap svg { display:block; width:100%; }
+
+/* ═══════════════════════════════════════════
+   QUALITY BAR
+═══════════════════════════════════════════ */
+.qbar-track {
+  height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden;
+  margin-top: 9px;
+}
+.qbar-fill { height:100%; border-radius:3px; transition:width .6s ease, background .3s; }
+
+/* ═══════════════════════════════════════════
+   RR BARS
+═══════════════════════════════════════════ */
+.rr-bars-wrap {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 72px; padding: 6px 0 0;
+}
+.rr-bar {
+  flex: 1; background: var(--ecg-dim);
+  border-top: 2px solid var(--ecg); border-radius: 2px 2px 0 0;
+  transition: height .4s ease;
+}
+
+/* ═══════════════════════════════════════════
+   FLAGS
+═══════════════════════════════════════════ */
+.flag-row { display:flex; flex-wrap:wrap; gap:5px; margin-top:12px; }
+.flag {
+  font-family:var(--mono); font-size:9.5px; font-weight:500;
+  padding:2.5px 9px; border-radius:4px;
+  border:1px solid var(--border); color:var(--text-dim);
+  letter-spacing:.05em; transition:all .25s;
+}
+.f-ok   { border-color:rgba(52,211,153,.3);  color:var(--good); background:rgba(52,211,153,.07); }
+.f-err  { border-color:rgba(248,113,113,.3); color:var(--danger); background:rgba(248,113,113,.07); }
+.f-warn { border-color:rgba(251,191,36,.3);  color:var(--warn); background:rgba(251,191,36,.06); }
+
+/* ═══════════════════════════════════════════
+   INFO ROWS
+═══════════════════════════════════════════ */
+.info-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:7px 0; border-bottom:1px solid var(--border);
+}
+.info-row:last-child { border-bottom:none; }
+.info-k { font-family:var(--mono); font-size:10px; color:var(--text-dim); }
+.info-v { font-family:var(--mono); font-size:11px; font-weight:500; color:var(--text-br); }
+
+.divider { height:1px; background:var(--border); margin:12px 0; }
+.sec-lbl {
+  font-family:var(--mono); font-size:8.5px; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--text-dim);
+  margin-bottom:9px;
+}
+
+/* ═══════════════════════════════════════════
+   CONNECTION PAGE
+═══════════════════════════════════════════ */
+.conn-type { cursor:pointer; transition:all .2s; }
+.conn-type:hover { border-color:var(--border2); transform:translateY(-1px); }
+.conn-type.sel   { border-color:var(--accent); background:linear-gradient(145deg,var(--surface),rgba(61,126,255,.06)); }
+.conn-icon { font-size:24px; margin-bottom:8px; }
+.conn-name { font-size:15px; font-weight:700; color:var(--text-br); margin-bottom:3px; }
+.conn-desc { font-size:11.5px; color:var(--text-dim); line-height:1.6; }
+
+.sm { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin:10px 0; }
+.sn {
+  font-family:var(--mono); font-size:10px; font-weight:500;
+  padding:3px 9px; border-radius:4px;
+  border:1px solid var(--border); color:var(--text-dim);
+  transition:all .3s; letter-spacing:.04em;
+}
+.sn.active {
+  background:var(--accent-dim); border-color:var(--accent); color:var(--accent);
+  box-shadow:0 0 10px rgba(61,126,255,.22);
+}
+.sm-arr { font-size:11px; color:var(--text-muted); }
+
+/* ═══════════════════════════════════════════
+   FORM
+═══════════════════════════════════════════ */
+.row { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
+.field {
+  flex:1; min-width:100px;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--rs); padding:9px 12px;
+  font-family:var(--mono); font-size:12px; color:var(--text-br);
+  outline:none; transition:border-color .2s;
+}
+.field:focus  { border-color:var(--accent); }
+.field::placeholder { color:var(--text-dim); }
+.field-sm   { max-width:72px; flex:none; }
+
+.btn {
+  background:var(--accent); color:#fff; border:none;
+  border-radius:var(--rs); padding:9px 17px;
+  font-family:var(--ui); font-size:12px; font-weight:600;
+  cursor:pointer; transition:all .18s; white-space:nowrap;
+}
+.btn:hover    { filter:brightness(1.15); transform:translateY(-1px); }
+.btn:active   { filter:brightness(.9); transform:none; }
+.btn:disabled { opacity:.35; cursor:not-allowed; transform:none; filter:none; }
+.btn-out  { background:transparent; border:1px solid var(--border2); color:var(--text); }
+.btn-out:hover { border-color:var(--accent); color:var(--accent); background:var(--accent-dim); }
+.btn-danger { background:var(--danger) !important; }
+.btn-ecg    { background:var(--ecg) !important; color:#000 !important; }
+.btn-sm     { padding:6px 13px; font-size:11px; }
+
+.log {
+  background:#040710; border:1px solid var(--border);
+  border-radius:var(--rs); padding:10px 12px;
+  font-family:var(--mono); font-size:10.5px; color:var(--text-dim);
+  height:140px; overflow-y:auto; line-height:1.75;
+}
+.log::-webkit-scrollbar { width:3px; }
+.log::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+.l-info { color:var(--accent); }
+.l-ok   { color:var(--ecg); }
+.l-err  { color:var(--danger); }
+.l-warn { color:var(--warn); }
+
+/* ═══════════════════════════════════════════
+   RECORDING
+═══════════════════════════════════════════ */
+.rec-timer {
+  font-family: var(--mono); font-size: 30px; font-weight: 600;
+  letter-spacing: .06em; min-width: 108px;
+  color: var(--text-dim);
+}
+.rec-controls { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.cb-list { display:flex; flex-direction:column; gap:8px; margin-top:6px; }
+.cb-item { display:flex; align-items:center; gap:8px; font-size:12.5px; cursor:pointer; }
+.cb-item input { accent-color:var(--accent); width:14px; height:14px; }
+
+.rec-tbl { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:10.5px; }
+.rec-tbl th {
+  text-align:left; padding:7px 11px; color:var(--text-dim);
+  border-bottom:1px solid var(--border); font-weight:500;
+  letter-spacing:.1em; text-transform:uppercase; font-size:9px;
+}
+.rec-tbl td { padding:8px 11px; color:var(--text); border-bottom:1px solid var(--border); }
+.rec-tbl tr:last-child td { border-bottom:none; }
+.rec-tbl tbody tr:hover td { background:var(--surface2); }
+</style>
+
+<style>
+  /* Reset and Basic Responsive Setup */
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 10px; font-family: sans-serif; }
+
+  /* Container for dashboard items */
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 15px;
+    width: 100%;
+  }
+
+  /* Make sure images and charts are responsive */
+  img, canvas, svg { max-width: 100%; height: auto; }
+
+  /* Mobile specific adjustments */
+  @media (max-width: 600px) {
+    .dashboard-grid {
+      grid-template-columns: 1fr; /* Stack everything on mobile */
+    }
+  }
+</style>
+
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div class="logo">
+    <div class="logo-dot"></div>
+    ESP32·HEALTH·v8.1
+  </div>
+  <div class="spacer"></div>
+  <div class="pills">
+    <div class="pill p-idle" id="pill-conn">
+      <span class="dot"></span><span id="pill-conn-txt">IDLE</span>
+    </div>
+    <div class="pill p-idle" id="pill-stream">
+      <span class="dot"></span><span id="pill-stream-txt">NO DATA</span>
+    </div>
+    <div class="pill p-idle" id="pill-rec">
+      <span class="dot"></span><span id="pill-rec-txt">NOT REC</span>
+    </div>
+  </div>
+</div>
+
+<!-- NAV — each tab calls switchTab() directly -->
+<div id="nav">
+  <div class="ntab active"  onclick="switchTab(this,'dashboard')">Dashboard</div>
+  <div class="ntab"         onclick="switchTab(this,'ecg')">ECG Detail</div>
+  <div class="ntab"         onclick="switchTab(this,'spo2')">SpO₂ / PPG</div>
+  <div class="ntab"         onclick="switchTab(this,'temp')">Temperature</div>
+  <div class="ntab"         onclick="switchTab(this,'connection')">Connection</div>
+  <div class="ntab"         onclick="switchTab(this,'recording')">Recording</div>
+</div>
+
+<!-- ════════════════════ DASHBOARD ════════════════════ -->
+<div class="page show" id="page-dashboard">
+
+  <div class="card mb12">
+    <div class="card-hdr">
+      <span class="card-label">ECG — Lead I · AD8232 · 250 Hz</span>
+      <div class="hdr-r">
+        <span class="badge b-dim" id="d-lead-badge">LEADS ON</span>
+        <span class="badge b-dim">25 mm/s</span>
+      </div>
+    </div>
+    <div class="ecg-wrap">
+      <canvas id="cnv-dash" class="h-sm"></canvas>
+      <div class="ecg-tl">CH1 · 1 mV/div</div>
+      <div class="ecg-br">DC-block → LP40 → Notch50</div>
+    </div>
+  </div>
+
+  <div class="g4">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">Heart Rate · ECG</span>
+        <span class="badge b-dim" id="d-hr-badge">--</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-ecg" id="d-hr">--</div>
+        <div class="unit">bpm</div>
+      </div>
+      <div class="sub" id="d-rr">RR: -- ms</div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">Pulse Rate · PPG</span>
+        <span class="badge b-dim" id="d-pr-badge">MAX30100</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-pr" id="d-pr">--</div>
+        <div class="unit">bpm</div>
+      </div>
+      <div class="sub" id="d-pr-sub">Finger: not detected</div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">SpO₂ · MAX30100</span>
+        <span class="badge b-dim" id="d-spo2-badge">--</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-spo2" id="d-spo2">--</div>
+        <div class="unit">%</div>
+      </div>
+      <div class="qbar-track">
+        <div class="qbar-fill" id="d-spo2-bar" style="width:0%;background:var(--spo2)"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">Temperature · DS18B20</span>
+        <span class="badge b-dim" id="d-temp-badge">--</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-temp" id="d-temp">--</div>
+        <div class="unit">°C</div>
+      </div>
+      <div class="sub" id="d-temp-cls">Classification: --</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════ ECG DETAIL ════════════════════ -->
+<div class="page" id="page-ecg">
+
+  <div class="card mb12">
+    <div class="card-hdr">
+      <span class="card-label">ECG Waveform — Real-Time · Pan-Tompkins QRS Detection</span>
+      <div class="hdr-r">
+        <span class="badge b-dim" id="ecg-lead-badge">LEADS ON</span>
+        <span class="badge b-dim">250 Hz · 8 samp/frame</span>
+      </div>
+    </div>
+    <div class="ecg-wrap">
+      <canvas id="cnv-ecg" class="h-lg"></canvas>
+      <div class="ecg-tl">Gain 1× · Notch 50 Hz ON</div>
+      <div class="ecg-br">AD8232 → GPIO34</div>
+    </div>
+    <div class="flag-row">
+      <div class="flag" id="f-leads">LEADS CONNECTED</div>
+      <div class="flag" id="f-tach">TACHYCARDIA</div>
+      <div class="flag" id="f-brady">BRADYCARDIA</div>
+      <div class="flag" id="f-irreg">IRREGULAR RHYTHM</div>
+    </div>
+  </div>
+
+  <div class="g2">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">HR Trend (ECG) — Last 60 Beats</span>
+      </div>
+      <div class="trend-wrap">
+        <svg id="svg-hr" viewBox="0 0 400 100" preserveAspectRatio="none" height="100">
+          <defs>
+            <linearGradient id="g-hr" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#00e59e" stop-opacity=".3"/>
+              <stop offset="100%" stop-color="#00e59e" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path id="p-hr-fill" fill="url(#g-hr)" d=""/>
+          <path id="p-hr-line" fill="none" stroke="#00e59e" stroke-width="1.6" d=""/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:9px">
+        <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">MIN <span id="hr-min" style="color:var(--text)">--</span></span>
+        <div class="v-md c-ecg" id="ecg-hr-val">--</div>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">MAX <span id="hr-max" style="color:var(--text)">--</span></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">RR Interval — Last 16 Beats</span>
+        <span class="badge b-dim" id="rr-badge">-- ms</span>
+      </div>
+      <div class="rr-bars-wrap" id="rr-bars"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:9px">
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-dim)">RR: <span id="rr-ms" style="color:var(--ecg)">-- ms</span></span>
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-dim)">HRV rMSSD: <span id="hrv-val" style="color:var(--text)">-- ms</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════ SPO2 ════════════════════ -->
+<div class="page" id="page-spo2">
+  <div class="g2 mb12">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">SpO₂ — Peripheral O₂ Saturation</span>
+        <span class="badge b-dim" id="spo2-badge2">--</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-spo2" id="spo2-val2">--</div>
+        <div class="unit">%</div>
+      </div>
+      <div class="divider"></div>
+      <div class="sec-lbl">Signal Quality</div>
+      <div class="qbar-track" style="height:8px;margin-bottom:6px">
+        <div class="qbar-fill" id="spo2-qbar" style="width:0%;background:var(--spo2)"></div>
+      </div>
+      <div class="sub" id="spo2-qlbl">Finger not detected</div>
+      <div class="flag-row">
+        <div class="flag" id="f-finger">FINGER DETECTED</div>
+        <div class="flag" id="f-spo2v">SpO₂ VALID</div>
+        <div class="flag" id="f-prv">PR VALID</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">Pulse Rate · PPG (MAX30100)</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-pr" id="pr-val2">--</div>
+        <div class="unit">bpm</div>
+      </div>
+      <div class="divider"></div>
+      <div class="sec-lbl">Stability (needs 5 readings)</div>
+      <div class="qbar-track" style="height:8px;margin-bottom:6px">
+        <div class="qbar-fill" id="pr-stab-bar" style="width:0%;background:var(--pr)"></div>
+      </div>
+      <div class="sub" id="pr-stab-lbl">Waiting for stable readings...</div>
+    </div>
+  </div>
+
+  <div class="g2">
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">SpO₂ Trend — 1 s/point</span></div>
+      <div class="trend-wrap">
+        <svg id="svg-spo2" viewBox="0 0 400 100" preserveAspectRatio="none" height="100">
+          <defs>
+            <linearGradient id="g-spo2" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#a78bfa" stop-opacity=".32"/>
+              <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line id="spo2-thr-line" x1="0" y1="40" x2="400" y2="40"
+                stroke="rgba(248,113,113,0.35)" stroke-width="1" stroke-dasharray="4,3"/>
+          <path id="p-spo2-fill" fill="url(#g-spo2)" d=""/>
+          <path id="p-spo2-line" fill="none" stroke="#a78bfa" stroke-width="1.6" d=""/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:9px;font-family:var(--mono);font-size:10px;color:var(--text-dim)">
+        <span>MIN: <span id="spo2-min">--</span></span>
+        <span style="color:rgba(248,113,113,.5)">— 95% threshold</span>
+        <span>MAX: <span id="spo2-max">--</span></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">Pulse Rate Trend (PPG) — 1 s/point</span></div>
+      <div class="trend-wrap">
+        <svg id="svg-pr" viewBox="0 0 400 100" preserveAspectRatio="none" height="100">
+          <defs>
+            <linearGradient id="g-pr" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#38bdf8" stop-opacity=".3"/>
+              <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path id="p-pr-fill" fill="url(#g-pr)" d=""/>
+          <path id="p-pr-line" fill="none" stroke="#38bdf8" stroke-width="1.6" d=""/>
+        </svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:9px;font-family:var(--mono);font-size:10px;color:var(--text-dim)">
+        <span>MIN: <span id="pr-min">--</span></span>
+        <span>MAX: <span id="pr-max">--</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════ TEMPERATURE ════════════════════ -->
+<div class="page" id="page-temp">
+  <div class="g2 mb12">
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-label">Temperature · DS18B20 · GPIO4</span>
+        <span class="badge b-dim" id="temp-badge2">--</span>
+      </div>
+      <div class="metric">
+        <div class="v-xl c-temp" id="temp-val2">--</div>
+        <div class="unit">°C</div>
+      </div>
+      <div class="divider"></div>
+      <div class="info-row"><div class="info-k">Classification</div><div class="info-v" id="temp-cls2">--</div></div>
+      <div class="info-row"><div class="info-k">Session Min</div><div class="info-v" id="temp-smin">--</div></div>
+      <div class="info-row"><div class="info-k">Session Max</div><div class="info-v" id="temp-smax">--</div></div>
+      <div class="info-row"><div class="info-k">Update Rate</div><div class="info-v">Every 5 s</div></div>
+      <div class="info-row"><div class="info-k">Last Update</div><div class="info-v" id="temp-updated">--</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">Classification Reference</span></div>
+      <div class="info-row"><div class="info-k">Hypothermia</div><div class="info-v" style="color:#38bdf8">&lt; 35.0 °C</div></div>
+      <div class="info-row"><div class="info-k">Low Normal</div><div class="info-v" style="color:var(--text)">35.0 – 36.0 °C</div></div>
+      <div class="info-row"><div class="info-k">Normal</div><div class="info-v" style="color:var(--good)">36.1 – 37.2 °C</div></div>
+      <div class="info-row"><div class="info-k">Low-grade Fever</div><div class="info-v" style="color:var(--warn)">37.3 – 38.0 °C</div></div>
+      <div class="info-row"><div class="info-k">Fever</div><div class="info-v" style="color:var(--temp)">38.1 – 39.0 °C</div></div>
+      <div class="info-row"><div class="info-k">High Fever</div><div class="info-v" style="color:var(--danger)">&gt; 39.0 °C</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-label">Temperature Trend — Last 30 Readings · 5 s/point</span>
+    </div>
+    <div class="trend-wrap">
+      <svg id="svg-temp" viewBox="0 0 400 120" preserveAspectRatio="none" height="120">
+        <defs>
+          <linearGradient id="g-temp" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#fb923c" stop-opacity=".35"/>
+            <stop offset="100%" stop-color="#fb923c" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <rect id="temp-norm-band" x="0" y="0" width="400" height="0" fill="rgba(52,211,153,.06)"/>
+        <path id="p-temp-fill" fill="url(#g-temp)" d=""/>
+        <path id="p-temp-line" fill="none" stroke="#fb923c" stroke-width="1.6" d=""/>
+      </svg>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:9px;font-family:var(--mono);font-size:10px;color:var(--text-dim)">
+      <span>MIN: <span id="temp-chart-min">--</span></span>
+      <span style="color:rgba(52,211,153,.55)">■ Normal 36.1 – 37.2 °C</span>
+      <span>MAX: <span id="temp-chart-max">--</span></span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════ CONNECTION ════════════════════ -->
+<div class="page" id="page-connection">
+
+  <div class="g3 mb14">
+    <div class="card conn-type sel" id="ct-wifi" onclick="selectConnType('wifi')">
+      <div class="conn-icon">📶</div>
+      <div class="conn-name">WiFi / WebSocket</div>
+      <div class="conn-desc">Join <strong>ESP32-Health-AP</strong> (pw: health123), then connect WebSocket on port 81. JSON newline-delimited protocol.</div>
+    </div>
+    <div class="card conn-type" id="ct-ble" onclick="selectConnType('ble')">
+      <div class="conn-icon">📡</div>
+      <div class="conn-name">Bluetooth BLE</div>
+      <div class="conn-desc">Web Bluetooth API — Chrome / Edge + HTTPS. Binary GATT on 5 characteristics. Device: <strong>ESP32-ECG</strong></div>
+    </div>
+    <div class="card conn-type" id="ct-usb" onclick="selectConnType('usb')">
+      <div class="conn-icon">🔌</div>
+      <div class="conn-name">USB Serial</div>
+      <div class="conn-desc">Web Serial API — Chrome / Edge. 115 200 baud, JSON newline-delimited frames. Plug ESP32 into PC USB.</div>
+    </div>
+  </div>
+
+  <!-- WiFi panel -->
+  <div id="panel-wifi" class="mb14">
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">WiFi · WebSocket Configuration</span></div>
+      <div class="row">
+        <input class="field" id="ws-ip"   type="text" placeholder="192.168.4.1" value="192.168.4.1">
+        <input class="field field-sm" id="ws-port" type="text" placeholder="81" value="81">
+        <button class="btn" id="btn-wsc" onclick="doConnectWS()">Connect</button>
+        <button class="btn btn-out" id="btn-wsd" onclick="doDisconnectWS()" disabled>Disconnect</button>
+      </div>
+      <div class="sec-lbl">Connection State Machine</div>
+      <div class="sm">
+        <div class="sn" data-s="IDLE">IDLE</div><div class="sm-arr">→</div>
+        <div class="sn" data-s="SEARCHING">SEARCHING</div><div class="sm-arr">→</div>
+        <div class="sn" data-s="FOUND">FOUND</div><div class="sm-arr">→</div>
+        <div class="sn" data-s="CONNECTING">CONNECTING</div><div class="sm-arr">→</div>
+        <div class="sn" data-s="CONNECTED">CONNECTED</div><div class="sm-arr">→</div>
+        <div class="sn" data-s="STREAMING">STREAMING</div>
+      </div>
+      <div class="sm">
+        <div class="sn" data-s="FAILED">FAILED</div><div class="sm-arr">·</div>
+        <div class="sn" data-s="TIMEOUT">TIMEOUT</div><div class="sm-arr">·</div>
+        <div class="sn" data-s="RECONNECTING">RECONNECTING</div><div class="sm-arr">·</div>
+        <div class="sn" data-s="NO_DATA">NO_DATA</div>
+      </div>
+      <div class="sec-lbl" style="margin-top:12px">Log</div>
+      <div class="log" id="log-wifi"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-out btn-sm" onclick="clearLog('log-wifi')">Clear Log</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BLE panel -->
+  <div id="panel-ble" style="display:none" class="mb14">
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">Bluetooth BLE — GATT</span></div>
+      <div style="font-size:12px;color:var(--text-dim);line-height:1.65;margin-bottom:12px">
+        Device: <strong style="color:var(--text-br)">ESP32-ECG</strong>&nbsp;·&nbsp;
+        Service: <code style="font-family:var(--mono);font-size:10px;color:var(--accent)">6e400001-b5a3-f393-e0a9-e50e24dcca9e</code>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="doConnectBLE()">🔍 Scan &amp; Connect</button>
+        <button class="btn btn-out" id="btn-ble-d" onclick="doDisconnectBLE()" disabled>Disconnect</button>
+      </div>
+      <div class="log" id="log-ble" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- USB panel -->
+  <div id="panel-usb" style="display:none" class="mb14">
+    <div class="card">
+      <div class="card-hdr"><span class="card-label">USB Serial — Web Serial API</span></div>
+      <div style="font-size:12px;color:var(--text-dim);line-height:1.65;margin-bottom:12px">
+        Baud: <strong style="color:var(--text-br)">115 200</strong>&nbsp;·&nbsp;JSON newline-delimited frames
+      </div>
+      <div class="row">
+        <button class="btn" onclick="doConnectSerial()">🔌 Open Port</button>
+        <button class="btn btn-out" id="btn-ser-d" onclick="doDisconnectSerial()" disabled>Close Port</button>
+      </div>
+      <div class="log" id="log-usb" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr"><span class="card-label">Device Info · Last Handshake</span></div>
+    <div class="g2" style="gap:0">
+      <div>
+        <div class="info-row"><div class="info-k">AP SSID</div><div class="info-v" id="di-ssid">--</div></div>
+        <div class="info-row"><div class="info-k">Device IP</div><div class="info-v" id="di-ip">--</div></div>
+        <div class="info-row"><div class="info-k">Sample Rate</div><div class="info-v" id="di-fs">--</div></div>
+      </div>
+      <div>
+        <div class="info-row"><div class="info-k">Packets/s</div><div class="info-v" id="di-pps">--</div></div>
+        <div class="info-row"><div class="info-k">Bytes Recv</div><div class="info-v" id="di-bytes">--</div></div>
+        <div class="info-row"><div class="info-k">Last Packet</div><div class="info-v" id="di-last">--</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════ RECORDING ════════════════════ -->
+<div class="page" id="page-recording">
+  <div class="card mb12">
+    <div class="card-hdr"><span class="card-label">Recording Controls</span></div>
+    <div class="rec-controls">
+      <div class="rec-timer" id="rec-timer">00:00:00</div>
+      <button class="btn btn-ecg" id="btn-rec" onclick="toggleRec()">⏺ Start Recording</button>
+      <button class="btn btn-out" id="btn-export" onclick="doExport()" disabled>⬇ Export CSV</button>
+    </div>
+    <div class="divider"></div>
+    <div class="sec-lbl">Signals to Record</div>
+    <div class="cb-list">
+      <label class="cb-item"><input type="checkbox" id="cb-ecg"  checked> ECG Waveform — raw batch samples (8 per frame · 250 Hz)</label>
+      <label class="cb-item"><input type="checkbox" id="cb-beat" checked> Beat Events — HR (bpm) &amp; RR interval (ms)</label>
+      <label class="cb-item"><input type="checkbox" id="cb-ox"   checked> SpO₂ &amp; Pulse Rate — MAX30100 (1 s/reading)</label>
+      <label class="cb-item"><input type="checkbox" id="cb-tmp"  checked> Temperature — DS18B20 °C (every 5 s)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hdr">
+      <span class="card-label">Session Data — Last 50 Rows</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim)" id="rec-count">0 records</span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="rec-tbl">
+        <thead>
+          <tr><th>Timestamp</th><th>Type</th><th>Value 1</th><th>Value 2</th><th>Value 3</th></tr>
+        </thead>
+        <tbody id="rec-tbody">
+          <tr><td colspan="5" style="text-align:center;color:var(--text-dim);padding:26px;
+              font-family:var(--mono);font-size:11px">
+            — Connect ESP32 and press Start Recording —
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ── TAB SWITCHER ─────────────────────────────
+   Receives the clicked element and the target page id.
+   Avoids any event delegation that could silently fail.
+────────────────────────────────────────────── */
+function switchTab(el, pageId) {
+  // 1. Deactivate all tabs
+  var tabs = document.querySelectorAll('#nav .ntab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].classList.remove('active');
+  }
+  // 2. Activate the clicked tab
+  el.classList.add('active');
+
+  // 3. Hide all pages
+  var pages = document.querySelectorAll('.page');
+  for (var j = 0; j < pages.length; j++) {
+    pages[j].classList.remove('show');
+  }
+  // 4. Show the target page
+  var target = document.getElementById('page-' + pageId);
+  if (target) target.classList.add('show');
+
+  // 5. Force ECG canvas re-measure when its tab becomes visible
+  if (pageId === 'ecg') {
+    delete CNV_CACHE['cnv-ecg'];
+  }
+}
+
+/* ── CONSTANTS ──────────────────────────────── */
+var C = {
+  ECG_BUF:   1500,
+  TREND_LEN:   60,
+  RR_LEN:      16,
+  TEMP_LEN:    30,
+  ECG_MIN:   1100,
+  ECG_MAX:   3100,
+  HR_LO: 60, HR_HI: 100,
+  SPO2_THR: 95,
+  TEMP_LO: 36.1, TEMP_HI: 37.2,
+  BLE_SVC:  '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  BLE_ECG:  '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+  BLE_ST:   '6e400004-b5a3-f393-e0a9-e50e24dcca9e',
+  BLE_BEAT: '6e400005-b5a3-f393-e0a9-e50e24dcca9e',
+  BLE_SPO2: '6e400006-b5a3-f393-e0a9-e50e24dcca9e',
+  BLE_TEMP: '6e400007-b5a3-f393-e0a9-e50e24dcca9e',
+};
+
+/* ── DATA BUFFER ────────────────────────────── */
+var DB = {
+  ecg: new Float32Array(C.ECG_BUF), ecgHead: 0,
+  hrArr: [], rrArr: [], spo2Arr: [], prArr: [], tmpArr: [],
+  hrMin: null, hrMax: null, spo2Min: null, spo2Max: null,
+  prMin: null, prMax: null, tmpMin: null, tmpMax: null,
+
+  pushECG: function(v) {
+    this.ecg[this.ecgHead] = v;
+    this.ecgHead = (this.ecgHead + 1) % C.ECG_BUF;
+  },
+  push: function(arr, minK, maxK, v, cap) {
+    arr.push(v);
+    if (arr.length > cap) arr.shift();
+    if (this[minK] === null || v < this[minK]) this[minK] = v;
+    if (this[maxK] === null || v > this[maxK]) this[maxK] = v;
+  },
+  slice: function(n) {
+    var out = new Float32Array(n), h = this.ecgHead;
+    for (var i = 0; i < n; i++) {
+      out[i] = this.ecg[(h - n + i + C.ECG_BUF * 1000) % C.ECG_BUF];
+    }
+    return out;
+  }
+};
+
+/* ── SIGNAL QUALITY ─────────────────────────── */
+function clsHR(bpm) {
+  if (bpm > 100) return { lbl:'TACHYCARDIA', cls:'b-warn' };
+  if (bpm <  60) return { lbl:'BRADYCARDIA', cls:'b-warn' };
+  return              { lbl:'NORMAL',       cls:'b-good' };
+}
+function clsSpO2(v) {
+  if (v >= 95) return { lbl:'NORMAL',  cls:'b-good' };
+  if (v >= 90) return { lbl:'LOW',      cls:'b-warn' };
+  return            { lbl:'CRITICAL', cls:'b-err' };
+}
+function clsTemp(c) {
+  if (c < 35.0)  return { lbl:'Hypothermia',      cls:'b-info' };
+  if (c < 36.1)  return { lbl:'Low Normal',        cls:'b-dim'  };
+  if (c <= 37.2) return { lbl:'Normal',             cls:'b-good' };
+  if (c <= 38.0) return { lbl:'Low-grade Fever',   cls:'b-warn' };
+  if (c <= 39.0) return { lbl:'Fever',              cls:'b-warn' };
+  return               { lbl:'High Fever',         cls:'b-err'  };
+}
+function rmssd(arr) {
+  if (arr.length < 2) return null;
+  var s = 0;
+  for (var i = 1; i < arr.length; i++) { var d = arr[i]-arr[i-1]; s += d*d; }
+  return Math.round(Math.sqrt(s / (arr.length - 1)));
+}
+
+/* ── PACKET PARSERS ─────────────────────────── */
+function parsePacket(raw) {
+  var p;
+  try { p = JSON.parse(raw.trim()); } catch(_) { return; }
+  switch (p.t) {
+    case 'ecg':
+      if (Array.isArray(p.d)) {
+        for (var i = 0; i < p.d.length; i++) DB.pushECG(p.d[i]);
+      }
+      if (REC.active) REC.push('ecg', p.d.join(';'), '', '');
+      break;
+    case 'beat': onBeat(p.b, p.rr); break;
+    case 'ox':   onSpO2(p.s, p.h); break;
+    case 'tmp':  onTemp(p.c); break;
+    case 'st':   onLeads(p.lo === 1); break;
+    case 'info':
+      _setText('di-ssid', p.ssid || '--');
+      _setText('di-ip',   p.ip   || '--');
+      _setText('di-fs',   (p.fs || '--') + ' Hz');
+      _addLog('log-wifi', 'Device: SSID=' + p.ssid + ' IP=' + p.ip + ' FS=' + p.fs + 'Hz', 'ok');
+      break;
+  }
+}
+
+function onBeat(hr, rr) {
+  DB.push(DB.hrArr, 'hrMin', 'hrMax', hr, C.TREND_LEN);
+  DB.push(DB.rrArr, null, null, rr, C.RR_LEN);
+  if (REC.active) REC.push('beat', hr, rr, '');
+
+  var cls = clsHR(hr);
+  _setText('d-hr',     hr);   _setBadge('d-hr-badge', cls.lbl, cls.cls);
+  _setText('ecg-hr-val', hr);
+  _setText('d-rr', 'RR: ' + rr + ' ms');
+  _setText('rr-ms', rr + ' ms'); _setBadge('rr-badge', rr + ' ms', 'b-dim');
+  _setText('hr-min', DB.hrMin || '--'); _setText('hr-max', DB.hrMax || '--');
+  var hrv = rmssd(DB.rrArr);
+  _setText('hrv-val', hrv !== null ? hrv + ' ms' : '-- ms');
+
+  _updateECGFlags(hr);
+  _renderHR();
+  _renderRRBars();
+}
+
+function onSpO2(spo2, pr) {
+  var finger = spo2 > 0 && pr > 0;
+  if (finger) {
+    DB.push(DB.spo2Arr, 'spo2Min', 'spo2Max', spo2, C.TREND_LEN);
+    DB.push(DB.prArr,   'prMin',   'prMax',   pr,   C.TREND_LEN);
+  }
+  if (REC.active) REC.push('ox', spo2, pr, '');
+
+  var cls  = clsSpO2(spo2);
+  var qPct = finger ? Math.min(100, Math.max(0, ((spo2-70)/30)*100)) : 0;
+  var qCol = spo2 >= 95 ? 'var(--spo2)' : spo2 >= 90 ? 'var(--warn)' : 'var(--danger)';
+
+  _setText('d-spo2', spo2 > 0 ? spo2 : '--');
+  _setBadge('d-spo2-badge', spo2 > 0 ? cls.lbl : '--', spo2 > 0 ? cls.cls : 'b-dim');
+  _setBar('d-spo2-bar', qPct, qCol);
+  _setText('d-pr', pr > 0 ? pr : '--');
+  _setText('d-pr-sub', finger ? 'Signal: ' + Math.round(qPct) + '%' : 'Finger: not detected');
+
+  _setText('spo2-val2', spo2 > 0 ? spo2 : '--');
+  _setBadge('spo2-badge2', spo2 > 0 ? cls.lbl : '--', spo2 > 0 ? cls.cls : 'b-dim');
+  _setBar('spo2-qbar', qPct, qCol);
+  _setText('spo2-qlbl', finger ? 'Quality: ' + Math.round(qPct) + '%' : 'Finger not detected');
+  _setText('spo2-min', DB.spo2Min || '--'); _setText('spo2-max', DB.spo2Max || '--');
+
+  _setText('pr-val2', pr > 0 ? pr : '--');
+  _setText('pr-min',  DB.prMin  || '--'); _setText('pr-max', DB.prMax || '--');
+
+  var stab = finger ? Math.min(100, (DB.spo2Arr.length / 5) * 100) : 0;
+  _setBar('pr-stab-bar', stab, 'var(--pr)');
+  _setText('pr-stab-lbl', finger
+    ? (stab >= 100 ? 'Signal stable' : 'Stabilizing... ' + DB.spo2Arr.length + '/5 readings')
+    : 'Waiting for finger placement');
+
+  _setFlag('f-finger', finger, 'f-ok', 'FINGER DETECTED');
+  _setFlag('f-spo2v',  spo2 >= C.SPO2_THR, 'f-ok', 'SpO₂ VALID');
+  _setFlag('f-prv',    pr >= 40 && pr <= 200, 'f-ok', 'PR VALID');
+
+  _renderSpO2();
+  _renderPR();
+}
+
+function onTemp(c) {
+  DB.push(DB.tmpArr, 'tmpMin', 'tmpMax', c, C.TEMP_LEN);
+  if (REC.active) REC.push('tmp', c.toFixed(2), '', '');
+
+  var info = clsTemp(c);
+  _setText('d-temp',   c.toFixed(1)); _setBadge('d-temp-badge', info.lbl, info.cls);
+  _setText('d-temp-cls', 'Classification: ' + info.lbl);
+  _setText('temp-val2', c.toFixed(2)); _setBadge('temp-badge2', info.lbl, info.cls);
+  _setText('temp-cls2', info.lbl);
+  _setText('temp-smin', DB.tmpMin !== null ? DB.tmpMin.toFixed(2) + ' °C' : '--');
+  _setText('temp-smax', DB.tmpMax !== null ? DB.tmpMax.toFixed(2) + ' °C' : '--');
+  _setText('temp-updated', new Date().toLocaleTimeString());
+  _renderTemp();
+}
+
+function onLeads(off) {
+  var lbl = off ? 'LEADS OFF' : 'LEADS ON';
+  var cls = off ? 'b-err' : 'b-dim';
+  _setBadge('d-lead-badge',   lbl, cls);
+  _setBadge('ecg-lead-badge', lbl, cls);
+  _setFlag('f-leads', !off, off ? 'f-err' : 'f-ok', off ? 'LEADS OFF' : 'LEADS CONNECTED');
+}
+
+/* ── ECG CANVAS ─────────────────────────────── */
+var CNV_CACHE = {};
+
+function drawECG(id) {
+  var canvas = document.getElementById(id);
+  if (!canvas) return;
+  var dpr = window.devicePixelRatio || 1;
+  var W = canvas.offsetWidth, H = canvas.offsetHeight;
+  if (!W || !H) return;
+
+  if (!CNV_CACHE[id] || CNV_CACHE[id] !== W) {
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    CNV_CACHE[id] = W;
+  }
+
+  var ctx = canvas.getContext('2d');
+  ctx.save(); ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#040710'; ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  var gW = W/25, gH = H/10;
+  for (var x = 0; x <= W; x += gW) {
+    ctx.strokeStyle = (Math.round(x/gW)%5===0) ? '#14202e' : '#0e1620';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+  }
+  for (var y = 0; y <= H; y += gH) {
+    ctx.strokeStyle = (Math.round(y/gH)%5===0) ? '#14202e' : '#0e1620';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+  }
+  ctx.strokeStyle = '#182840'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+
+  // Leads-off overlay
+  var badge = document.getElementById('d-lead-badge');
+  if (badge && badge.textContent === 'LEADS OFF') {
+    ctx.fillStyle = 'rgba(248,113,113,0.65)';
+    ctx.font = "500 11px 'JetBrains Mono',monospace";
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⚠  LEADS OFF — Check electrode placement', W/2, H/2);
+    ctx.restore(); return;
+  }
+
+  // Trace
+  var n   = Math.min(W, C.ECG_BUF);
+  var sl  = DB.slice(n);
+  var mn  = C.ECG_MIN, mx = C.ECG_MAX;
+  var pad = H * 0.08, dH = H - pad * 2;
+
+  // Glow
+  ctx.save();
+  ctx.strokeStyle = 'rgba(0,229,158,0.1)'; ctx.lineWidth = 5;
+  ctx.shadowColor = 'rgba(0,229,158,0.4)'; ctx.shadowBlur = 10;
+  ctx.beginPath();
+  for (var i = 0; i < n; i++) {
+    var px = (i/(n-1))*W, py = pad+(1-(sl[i]-mn)/(mx-mn))*dH;
+    i===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+  }
+  ctx.stroke(); ctx.restore();
+
+  // Sharp
+  ctx.strokeStyle = '#00e59e'; ctx.lineWidth = 1.4;
+  ctx.shadowColor = 'rgba(0,229,158,0.25)'; ctx.shadowBlur = 3;
+  ctx.beginPath();
+  for (var k = 0; k < n; k++) {
+    var qx = (k/(n-1))*W, qy = pad+(1-(sl[k]-mn)/(mx-mn))*dH;
+    k===0 ? ctx.moveTo(qx,qy) : ctx.lineTo(qx,qy);
+  }
+  ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/* ── TREND CHARTS ───────────────────────────── */
+function _tPath(data, vw, vh, mn, mx) {
+  if (data.length < 2) return '';
+  return data.map(function(v,i){
+    var x = (i/(data.length-1))*vw;
+    var y = vh - Math.max(4, Math.min(vh-4, ((v-mn)/((mx-mn)||1))*(vh-8)+4));
+    return (i===0?'M':'L')+' '+x.toFixed(1)+' '+y.toFixed(1);
+  }).join(' ');
+}
+function _tFill(data, vw, vh, mn, mx) {
+  if (data.length < 2) return '';
+  var ln = _tPath(data,vw,vh,mn,mx);
+  return ln+' L '+((data.length-1)/(data.length-1)*vw).toFixed(1)+' '+vh+' L 0 '+vh+' Z';
+}
+function _setPath(lineId, fillId, data, vw, vh, mn, mx) {
+  document.getElementById(lineId).setAttribute('d', _tPath(data,vw,vh,mn,mx));
+  document.getElementById(fillId).setAttribute('d', _tFill(data,vw,vh,mn,mx));
+}
+
+function _renderHR() {
+  var d = DB.hrArr; if (d.length<2) return;
+  var mn=Math.max(30,Math.min.apply(null,d)-5), mx=Math.max.apply(null,d)+5;
+  _setPath('p-hr-line','p-hr-fill',d,400,100,mn,mx);
+}
+function _renderSpO2() {
+  var d = DB.spo2Arr; if (d.length<2) return;
+  _setPath('p-spo2-line','p-spo2-fill',d,400,100,85,100);
+  var tY = (100-((C.SPO2_THR-85)/15)*92).toFixed(1);
+  document.getElementById('spo2-thr-line').setAttribute('y1',tY);
+  document.getElementById('spo2-thr-line').setAttribute('y2',tY);
+}
+function _renderPR() {
+  var d = DB.prArr; if (d.length<2) return;
+  var mn=Math.max(30,Math.min.apply(null,d)-5), mx=Math.max.apply(null,d)+5;
+  _setPath('p-pr-line','p-pr-fill',d,400,100,mn,mx);
+}
+function _renderTemp() {
+  var d = DB.tmpArr; if (d.length<2) return;
+  var mn=Math.min(35,Math.min.apply(null,d)-0.3), mx=Math.max(38.5,Math.max.apply(null,d)+0.3);
+  _setPath('p-temp-line','p-temp-fill',d,400,120,mn,mx);
+  _setText('temp-chart-min', Math.min.apply(null,d).toFixed(2)+' °C');
+  _setText('temp-chart-max', Math.max.apply(null,d).toFixed(2)+' °C');
+  var nTop=(120-((C.TEMP_HI-mn)/(mx-mn))*112).toFixed(1);
+  var nBot=(120-((C.TEMP_LO-mn)/(mx-mn))*112).toFixed(1);
+  var band=document.getElementById('temp-norm-band');
+  band.setAttribute('y',nTop); band.setAttribute('height',Math.max(0,nBot-nTop).toFixed(1));
+}
+function _renderRRBars() {
+  var d=DB.rrArr; if(!d.length) return;
+  var mn=Math.min.apply(null,d), mx=Math.max.apply(null,d);
+  document.getElementById('rr-bars').innerHTML = d.map(function(rr,i){
+    var pct=mx>mn?20+((rr-mn)/(mx-mn))*75:50, op=(0.35+(i/d.length)*0.65).toFixed(2);
+    return '<div class="rr-bar" style="height:'+pct.toFixed(1)+'%;opacity:'+op+'"></div>';
+  }).join('');
+}
+
+/* ── ECG FLAGS ──────────────────────────────── */
+function _updateECGFlags(hr) {
+  var tach=hr>C.HR_HI, brady=hr<C.HR_LO, irreg=false;
+  if(DB.rrArr.length>=4){
+    var mean=DB.rrArr.reduce(function(a,b){return a+b;},0)/DB.rrArr.length;
+    var sd=Math.sqrt(DB.rrArr.reduce(function(a,b){return a+(b-mean)*(b-mean);},0)/DB.rrArr.length);
+    irreg=sd>80;
+  }
+  _setFlag('f-tach',  tach,  tach  ? 'f-err'  : '', 'TACHYCARDIA');
+  _setFlag('f-brady', brady, brady ? 'f-err'  : '', 'BRADYCARDIA');
+  _setFlag('f-irreg', irreg, irreg ? 'f-warn' : '', 'IRREGULAR RHYTHM');
+  _setFlag('f-leads', true, 'f-ok', 'LEADS CONNECTED');
+}
+
+/* ── STATUS PILLS ───────────────────────────── */
+function setConnState(s) {
+  document.querySelectorAll('.sn').forEach(function(n){
+    n.classList.toggle('active', n.dataset.s === s);
+  });
+  var pill=document.getElementById('pill-conn'), txt=document.getElementById('pill-conn-txt');
+  txt.textContent=s;
+  pill.className='pill ';
+  if(['STREAMING','CONNECTED'].includes(s))                      pill.className+='p-ok';
+  else if(['FAILED','TIMEOUT','NO_DATA'].includes(s))            pill.className+='p-err';
+  else if(['SEARCHING','CONNECTING','RECONNECTING'].includes(s)) pill.className+='p-warn';
+  else                                                            pill.className+='p-idle';
+
+  var sp=document.getElementById('pill-stream'), stxt=document.getElementById('pill-stream-txt');
+  if(s==='STREAMING'){ sp.className='pill p-ok'; stxt.textContent='STREAMING'; }
+  else if(s==='CONNECTED'){ sp.className='pill p-warn'; stxt.textContent='CONNECTED'; }
+  else { sp.className='pill p-idle'; stxt.textContent='NO DATA'; }
+}
+
+/* ── CONNECTION: WIFI / WS ──────────────────── */
+var WS=null, _wsRecon=null, _wsNodata=null;
+var _ppsTimer=null, _ppsCount=0, _totalBytes=0;
+var _wsIP='192.168.4.1', _wsPort=81;
+
+function _startPPS(){
+  _ppsTimer=setInterval(function(){
+    _setText('di-pps',_ppsCount+'/s');
+    _setText('di-bytes',_fmtBytes(_totalBytes));
+    _ppsCount=0;
+  },1000);
+}
+function _stopPPS(){ clearInterval(_ppsTimer); _setText('di-pps','--'); }
+function _armNodata(){
+  clearTimeout(_wsNodata);
+  _wsNodata=setTimeout(function(){
+    var s=document.getElementById('pill-conn-txt').textContent;
+    if(['CONNECTED','STREAMING'].includes(s)){ setConnState('NO_DATA'); _addLog('log-wifi','No data for 5 s','warn'); }
+  },5000);
+}
+function _fmtBytes(b){
+  if(b<1024) return b+' B';
+  if(b<1048576) return (b/1024).toFixed(1)+' KB';
+  return (b/1048576).toFixed(2)+' MB';
+}
+
+function doConnectWS(){
+  _wsIP   = document.getElementById('ws-ip').value.trim()    || '192.168.4.1';
+  _wsPort = parseInt(document.getElementById('ws-port').value) || 81;
+  _connectWS();
+}
+function _connectWS(){
+  setConnState('SEARCHING');
+  _addLog('log-wifi','Connecting to ws://'+_wsIP+':'+_wsPort+' ...','info');
+  try {
+    WS = new WebSocket('ws://'+_wsIP+':'+_wsPort);
+    WS.onopen = function(){
+      setConnState('CONNECTED');
+      _addLog('log-wifi','WebSocket open','ok');
+      _startPPS(); _armNodata();
+      document.getElementById('btn-wsc').disabled=true;
+      document.getElementById('btn-wsd').disabled=false;
+    };
+    WS.onmessage = function(e){
+      setConnState('STREAMING');
+      clearTimeout(_wsNodata); _armNodata();
+      _ppsCount++; _totalBytes+=e.data.length;
+      _setText('di-last', new Date().toLocaleTimeString());
+      parsePacket(e.data);
+    };
+    WS.onclose = function(){
+      _stopPPS();
+      var s=document.getElementById('pill-conn-txt').textContent;
+      if(s!=='IDLE'){ setConnState('RECONNECTING'); _addLog('log-wifi','Lost — retry in 3 s','warn'); _wsRecon=setTimeout(_connectWS,3000); }
+    };
+    WS.onerror = function(){ setConnState('FAILED'); _addLog('log-wifi','Failed. Is ESP32 AP at '+_wsIP+' active?','err'); };
+  } catch(e){ setConnState('FAILED'); _addLog('log-wifi','Error: '+e.message,'err'); }
+}
+function doDisconnectWS(){
+  clearTimeout(_wsRecon); clearTimeout(_wsNodata); _stopPPS();
+  if(WS){ WS.onclose=null; WS.close(); WS=null; }
+  setConnState('IDLE');
+  _addLog('log-wifi','Disconnected','info');
+  document.getElementById('btn-wsc').disabled=false;
+  document.getElementById('btn-wsd').disabled=true;
+}
+
+/* ── CONNECTION: BLE ────────────────────────── */
+var BLE_DEV=null;
+async function doConnectBLE(){
+  if(!navigator.bluetooth){ _addLog('log-ble','Web Bluetooth not available.','err'); return; }
+  setConnState('SEARCHING'); _addLog('log-ble','Scanning for ESP32-ECG...','info');
+  try {
+    BLE_DEV = await navigator.bluetooth.requestDevice({
+      filters:[{name:'ESP32-ECG'}], optionalServices:[C.BLE_SVC]
+    });
+    setConnState('FOUND'); _addLog('log-ble','Found: '+BLE_DEV.name,'ok');
+    setConnState('CONNECTING');
+    var svr=await BLE_DEV.gatt.connect(), svc=await svr.getPrimaryService(C.BLE_SVC);
+    setConnState('CONNECTED'); _addLog('log-ble','GATT connected — subscribing','ok');
+    document.getElementById('btn-ble-d').disabled=false; _startPPS();
+
+    var sub=async function(uuid,fn){
+      var ch=await svc.getCharacteristic(uuid);
+      await ch.startNotifications();
+      ch.addEventListener('characteristicvaluechanged',function(ev){ setConnState('STREAMING'); _ppsCount++; fn(ev.target.value); });
+    };
+    await sub(C.BLE_ECG,  function(dv){ for(var i=0;i<8;i++) DB.pushECG(((dv.getUint8(i*2)<<8)|dv.getUint8(i*2+1))); });
+    await sub(C.BLE_BEAT, function(dv){ onBeat((dv.getUint8(2)<<8)|dv.getUint8(3),(dv.getUint8(0)<<8)|dv.getUint8(1)); });
+    await sub(C.BLE_SPO2, function(dv){ onSpO2(dv.getUint8(0),(dv.getUint8(1)<<8)|dv.getUint8(2)); });
+    await sub(C.BLE_TEMP, function(dv){ var r=(dv.getUint8(0)<<8)|dv.getUint8(1); onTemp((r>32767?r-65536:r)/100); });
+    await sub(C.BLE_ST,   function(dv){ onLeads(dv.getUint8(0)===1); });
+    _addLog('log-ble','All characteristics subscribed. Streaming.','ok');
+  } catch(e){ setConnState('FAILED'); _addLog('log-ble','Error: '+e.message,'err'); }
+}
+function doDisconnectBLE(){
+  if(BLE_DEV&&BLE_DEV.gatt.connected) BLE_DEV.gatt.disconnect();
+  BLE_DEV=null; _stopPPS(); setConnState('IDLE');
+  _addLog('log-ble','Disconnected','info');
+  document.getElementById('btn-ble-d').disabled=true;
+}
+
+/* ── CONNECTION: USB SERIAL ─────────────────── */
+var SERIAL=null;
+async function doConnectSerial(){
+  if(!navigator.serial){ _addLog('log-usb','Web Serial not available. Use Chrome/Edge.','err'); return; }
+  setConnState('SEARCHING'); _addLog('log-usb','Requesting port...','info');
+  try {
+    SERIAL=await navigator.serial.requestPort();
+    await SERIAL.open({baudRate:115200});
+    setConnState('CONNECTED'); _addLog('log-usb','Port open at 115200','ok');
+    document.getElementById('btn-ser-d').disabled=false; _startPPS();
+    var dec=new TextDecoderStream();
+    SERIAL.readable.pipeTo(dec.writable);
+    var reader=dec.readable.getReader(), buf='';
+    (async function loop(){
+      try{
+        while(true){
+          var r=await reader.read(); if(r.done) break;
+          buf+=r.value; var lines=buf.split('\n'); buf=lines.pop();
+          lines.forEach(function(ln){ var t=ln.trim(); if(t){ setConnState('STREAMING'); _ppsCount++; _totalBytes+=t.length; _setText('di-last',new Date().toLocaleTimeString()); parsePacket(t); } });
+        }
+      }catch(e){ setConnState('FAILED'); _addLog('log-usb','Read error: '+e.message,'err'); }
+    })();
+  }catch(e){ setConnState('FAILED'); _addLog('log-usb','Error: '+e.message,'err'); }
+}
+function doDisconnectSerial(){
+  if(SERIAL){ SERIAL.close().catch(function(){}); SERIAL=null; }
+  _stopPPS(); setConnState('IDLE'); _addLog('log-usb','Port closed','info');
+  document.getElementById('btn-ser-d').disabled=true;
+}
+
+function selectConnType(t){
+  ['wifi','ble','usb'].forEach(function(k){
+    document.getElementById('ct-'+k).classList.toggle('sel',k===t);
+    document.getElementById('panel-'+k).style.display=k===t?'block':'none';
+  });
+}
+
+/* ── RECORDING ──────────────────────────────── */
+var REC={
+  active:false, start:null, records:[], _ti:null,
+  begin:function(){
+    this.active=true; this.start=Date.now(); this.records=[];
+    this._ti=setInterval(function(){REC._tick();},1000);
+    document.getElementById('btn-rec').textContent='⏹ Stop Recording';
+    document.getElementById('btn-rec').className='btn btn-danger';
+    var t=document.getElementById('rec-timer'); t.style.color='var(--danger)';
+    document.getElementById('btn-export').disabled=true;
+    document.getElementById('pill-rec').className='pill p-rec';
+    document.getElementById('pill-rec-txt').textContent='RECORDING';
+  },
+  end:function(){
+    this.active=false; clearInterval(this._ti);
+    document.getElementById('btn-rec').textContent='⏺ Start Recording';
+    document.getElementById('btn-rec').className='btn btn-ecg';
+    document.getElementById('rec-timer').style.color='var(--text-dim)';
+    document.getElementById('btn-export').disabled=this.records.length===0;
+    document.getElementById('pill-rec').className='pill p-idle';
+    document.getElementById('pill-rec-txt').textContent='NOT REC';
+  },
+  push:function(type,v1,v2,v3){
+    if(!this.active) return;
+    var map={ecg:'cb-ecg',beat:'cb-beat',ox:'cb-ox',tmp:'cb-tmp'};
+    if(map[type]&&!document.getElementById(map[type]).checked) return;
+    this.records.push({ts:new Date().toISOString(),type:type,v1:v1||'',v2:v2||'',v3:v3||''});
+    if(this.records.length%10===0||this.records.length<=5) this._refresh();
+    _setText('rec-count',this.records.length+' records');
+  },
+  _tick:function(){
+    var e=Math.floor((Date.now()-this.start)/1000);
+    document.getElementById('rec-timer').textContent=
+      String(Math.floor(e/3600)).padStart(2,'0')+':'+
+      String(Math.floor((e%3600)/60)).padStart(2,'0')+':'+
+      String(e%60).padStart(2,'0');
+  },
+  _refresh:function(){
+    var cols={ecg:'var(--ecg)',beat:'var(--ecg)',ox:'var(--spo2)',tmp:'var(--temp)'};
+    document.getElementById('rec-tbody').innerHTML=this.records.slice(-50).reverse().map(function(r){
+      return '<tr><td>'+r.ts.replace('T',' ').slice(0,22)+'</td><td style="color:'+(cols[r.type]||'var(--text)')+'">'+r.type.toUpperCase()+'</td><td>'+r.v1+'</td><td>'+r.v2+'</td><td>'+r.v3+'</td></tr>';
+    }).join('');
+  },
+  exportCSV:function(){
+    var rows=['timestamp,type,value1,value2,value3'].concat(this.records.map(function(r){return r.ts+','+r.type+','+r.v1+','+r.v2+','+r.v3;}));
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));
+    a.download='esp32_health_'+new Date().toISOString().slice(0,19).replace(/:/g,'-')+'.csv';
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+};
+function toggleRec(){ REC.active ? REC.end() : REC.begin(); }
+function doExport(){ REC.exportCSV(); }
+
+/* ── DOM HELPERS ────────────────────────────── */
+function _setText(id,val){ var e=document.getElementById(id); if(e) e.textContent=val; }
+function _setBadge(id,lbl,cls){ var e=document.getElementById(id); if(!e) return; e.textContent=lbl; e.className='badge '+cls; }
+function _setBar(id,pct,col){ var e=document.getElementById(id); if(!e) return; e.style.width=pct+'%'; e.style.background=col; }
+function _setFlag(id,active,cls,txt){
+  var e=document.getElementById(id); if(!e) return;
+  if(txt!==undefined) e.textContent=txt;
+  e.className='flag '+(active&&cls?cls:'');
+}
+function _addLog(boxId,msg,type){
+  var box=document.getElementById(boxId); if(!box) return;
+  var d=document.createElement('div'); d.className='l-'+(type||'info');
+  d.textContent='['+new Date().toLocaleTimeString()+'] '+msg;
+  box.appendChild(d); box.scrollTop=box.scrollHeight;
+  while(box.children.length>200) box.removeChild(box.firstChild);
+}
+function clearLog(id){ var b=document.getElementById(id); if(b) b.innerHTML=''; }
+
+/* ── RENDER LOOP ────────────────────────────── */
+function renderLoop(){
+  if(document.getElementById('page-dashboard').classList.contains('show')) drawECG('cnv-dash');
+  if(document.getElementById('page-ecg').classList.contains('show'))       drawECG('cnv-ecg');
+  requestAnimationFrame(renderLoop);
+}
+
+window.addEventListener('resize', function(){ CNV_CACHE={}; });
+
+/* ── INIT ───────────────────────────────────── */
+window.addEventListener('load', function(){
+  setConnState('IDLE');
+  _addLog('log-wifi', 'System ready — ESP32 Health Monitor v8.1', 'ok');
+  _addLog('log-wifi', '1. Join WiFi "ESP32-Health-AP" (password: health123)', 'info');
+  _addLog('log-wifi', '2. Enter IP 192.168.4.1  port 81  →  Connect', 'info');
+  renderLoop();
+});
+</script>
+</body>
+</html>
