@@ -1221,7 +1221,7 @@ function getTheme() {
 }
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
-  document.getElementById('themeIcon').textContent = t === 'dark' ? 'Light ☀️' : 'Dark 🌙';
+  document.getElementById('themeIcon').textContent = t === 'dark' ? '☀️' : '🌙';
   localStorage.setItem('biomonitor-theme', t);
   CNV_CACHE = {}; // force redraw ECG
 }
